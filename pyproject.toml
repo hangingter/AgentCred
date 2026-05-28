@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-score"
+version = "0.1.0"
+description = "A2A trust protocol for agent identity, credit scoring, and accountability"
+readme = "README.md"
+requires-python = ">=3.7"
+license = {text = "MIT"}
+authors = [{name = "Agent-Score Contributors"}]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Security",
+    "Topic :: System :: Distributed Computing",
+]
+keywords = ["ai-agent", "did", "verifiable-credentials", "credit-scoring", "a2a", "trust-protocol"]
+dependencies = [
+    "pydantic>=1.10,<2.0",
+    "fastapi>=0.95",
+    "uvicorn>=0.22",
+    "ecdsa>=0.18",
+    "python-jose[cryptography]>=3.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "httpx>=0.24",
+    "black>=23.0",
+    "flake8>=6.0",
+    "mypy>=1.0",
+]
+
+[project.urls]
+"Homepage" = "https://agent-score.org"
+"Documentation" = "https://docs.agent-score.org"
+"Repository" = "https://github.com/agent-score/agent-score"
+"Bug Tracker" = "https://github.com/agent-score/agent-score/issues"
+"Discord" = "https://discord.gg/agent-score"
+"Twitter" = "https://twitter.com/AgentScoreOrg"
+
+[tool.setuptools.packages.find]
+where = ["src/credit-engine", "src/a2a-middleware"]
+
+[tool.setuptools.package-data]
+"agent_score_engine" = ["*.pyi", "py.typed"]
+"agent_score_middleware" = ["*.pyi", "py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["src/credit-engine/tests", "src/a2a-middleware/tests", "demos/mvp/tests", "demos/http/tests"]
+pythonpath = ["src/credit-engine", "src/a2a-middleware", "demos/mvp", "demos/minimal", "demos/http"]
+
+[tool.black]
+line-length = 100
+target-version = ['py37']
+
+[tool.flake8]
+max-line-length = 100
+extend-ignore = ["E203", "W503"]
+
+[tool.mypy]
+python_version = "3.7"
+strict = true
+ignore_missing_imports = true
