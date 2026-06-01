@@ -12,9 +12,11 @@ from agent_score_engine import (
     ValidationAttestation,
     build_credit_vc,
     calculate_credit_score,
+    generate_es256k_private_key_pem,
+    public_key_pem_from_private_key,
     sign_credit_vc,
 )
-from agent_score_middleware import AgentCard, AgentPolicy, create_agent_app
+from agent_score_middleware import AgentCard, AgentPolicy, create_agent_app, sha256_json, sign_payload_jws
 
 
 ISSUER = "did:ethr:0x2105:0xissuer"
@@ -118,8 +120,56 @@ class FastAPIAdapterTest(unittest.TestCase):
         self.assertTrue(body["handshake"]["accepted"])
         self.assertEqual(body["ipr"]["caller_signature"], "caller-signed-unsigned-ipr")
 
+    def test_invalid_jws_caller_signature_gets_400(self) -> None:
+        caller_private = generate_es256k_private_key_pem()
+        caller_public = public_key_pem_from_private_key(caller_private)
+        wrong_private = generate_es256k_private_key_pem()
+        client = TestClient(_provider_app(public_key_by_agent={"did:ethr:0x2105:0xcaller": caller_public}))
+        caller_card = _card("caller").to_a2a_dict()
+        unsigned_ipr = _unsigned_ipr("caller", "provider", "task-1", "run risk check")
 
-def _provider_app(trusted_issuers=None):
+        response = client.post(
+            "/a2a",
+            json={
+                "caller_card": _http_card_payload(caller_card),
+                "task": {"task_id": "task-1", "prompt": "run risk check"},
+                "caller_signature": sign_payload_jws(
+                    unsigned_ipr,
+                    "did:ethr:0x2105:0xcaller",
+                    wrong_private,
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"]["reason"], "INVALID_CALLER_SIGNATURE")
+
+    def test_valid_jws_caller_signature_gets_200(self) -> None:
+        caller_private = generate_es256k_private_key_pem()
+        caller_public = public_key_pem_from_private_key(caller_private)
+        client = TestClient(_provider_app(public_key_by_agent={"did:ethr:0x2105:0xcaller": caller_public}))
+        caller_card = _card("caller").to_a2a_dict()
+        unsigned_ipr = _unsigned_ipr("caller", "provider", "task-1", "run risk check")
+
+        response = client.post(
+            "/a2a",
+            json={
+                "caller_card": _http_card_payload(caller_card),
+                "task": {"task_id": "task-1", "prompt": "run risk check"},
+                "caller_signature": sign_payload_jws(
+                    unsigned_ipr,
+                    "did:ethr:0x2105:0xcaller",
+                    caller_private,
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["handshake"]["accepted"])
+
+
+def _provider_app(trusted_issuers=None, public_key_by_agent=None):
     provider_card = _card("provider")
     policy = AgentPolicy(
         min_credit_score=600,
@@ -131,6 +181,7 @@ def _provider_app(trusted_issuers=None):
         provider_secret="provider-secret",
         policy=policy,
         secret_by_issuer={ISSUER: SECRET},
+        public_key_by_agent=public_key_by_agent,
         task_handler=lambda task: {
             "task_id": task["task_id"],
             "status": "completed",
@@ -184,6 +235,22 @@ def _http_card_payload(card_dict):
         "did": extension["did"],
         "principal": extension["principal"],
         "credit_vc": extension["credit_vc"],
+    }
+
+
+def _unsigned_ipr(caller: str, provider: str, task_id: str, prompt: str) -> dict:
+    result = {
+        "task_id": task_id,
+        "status": "completed",
+        "answer": f"handled {prompt}",
+    }
+    return {
+        "caller_did": f"did:ethr:0x2105:0x{caller}",
+        "callee_did": f"did:ethr:0x2105:0x{provider}",
+        "task_id": task_id,
+        "success": True,
+        "on_time": True,
+        "result_hash": sha256_json(result),
     }
 
 

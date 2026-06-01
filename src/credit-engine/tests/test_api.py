@@ -32,6 +32,7 @@ class CreditEngineAPITest(unittest.TestCase):
         self.assertLessEqual(body["score"], 1000)
         self.assertIn(body["tier"], ["S", "A", "B", "C", "D"])
         self.assertIn("dimensions", body)
+        self.assertGreater(body["dimensions"]["device"], 0)
 
     def test_issue_vc_requires_secret(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -75,6 +76,20 @@ def _sample_payload() -> dict:
         "endorsements": [{"endorser_id": "endorser", "score": 80, "cluster_id": "finance"}],
         "validations": [{"validator_id": "validator", "validation_type": "tee", "passed": True}],
         "principal": {"score": 800, "flagged": False, "vc_expired": False},
+        "device": {
+            "binding_level": "strong",
+            "attestation": {
+                "attestation_type": "tee_sgx_ecdsa_qe3",
+                "device_pubkey_hash": "0xabc",
+                "agent_did": "did:ethr:0x2105:0xagent",
+                "timestamp": 1779984000,
+                "quote": "demo-quote",
+                "signature": "demo-signature",
+            },
+            "network": {"country_code": "SG", "asn": 12345},
+            "registered_country_code": "SG",
+            "registered_asn": 12345,
+        },
     }
 
 

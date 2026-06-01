@@ -19,6 +19,7 @@ from agent_score_engine import (
     sign_credit_vc_jws,
 )
 from agent_score_middleware import AgentCard, AgentPolicy, InMemoryIPRAnchor, create_agent_app
+from agent_score_middleware import sha256_json, sign_payload_jws
 
 
 AUTHORITY_DID = "did:ethr:0x2105:0x000000000000000000000000000000000000CAFE"
@@ -27,15 +28,20 @@ AUTHORITY_DID = "did:ethr:0x2105:0x000000000000000000000000000000000000CAFE"
 def run_http_demo(print_output: bool = True) -> Dict[str, Any]:
     authority_private_key = generate_es256k_private_key_pem()
     authority_public_key = public_key_pem_from_private_key(authority_private_key)
+    caller_ipr_private_key = generate_es256k_private_key_pem()
+    caller_ipr_public_key = public_key_pem_from_private_key(caller_ipr_private_key)
+    provider_ipr_private_key = generate_es256k_private_key_pem()
     caller_card = _build_card("caller-agent", authority_private_key)
     provider_card = _build_card("provider-agent", authority_private_key)
     anchor = InMemoryIPRAnchor()
     app = create_agent_app(
         provider_card=provider_card,
         provider_secret="provider-http-secret",
+        provider_private_key_pem=provider_ipr_private_key,
         policy=AgentPolicy(min_credit_score=600, min_tier="B", trusted_issuers={AUTHORITY_DID}),
         secret_by_issuer={},
         public_key_by_issuer={AUTHORITY_DID: authority_public_key},
+        public_key_by_agent={caller_card.did: caller_ipr_public_key},
         ipr_anchor=anchor,
         task_handler=lambda task: {
             "task_id": task["task_id"],
@@ -46,12 +52,26 @@ def run_http_demo(print_output: bool = True) -> Dict[str, Any]:
     client = TestClient(app)
 
     provider_card_response = client.get("/agent-card")
+    task = {"task_id": "http-task-1", "prompt": "run production-shaped A2A trust check"}
+    expected_result = {
+        "task_id": task["task_id"],
+        "status": "completed",
+        "answer": f"HTTP provider handled: {task.get('prompt', '')}",
+    }
+    unsigned_ipr = {
+        "caller_did": caller_card.did,
+        "callee_did": provider_card.did,
+        "task_id": task["task_id"],
+        "success": True,
+        "on_time": True,
+        "result_hash": sha256_json(expected_result),
+    }
     a2a_response = client.post(
         "/a2a",
         json={
             "caller_card": _http_card_payload(caller_card.to_a2a_dict()),
-            "task": {"task_id": "http-task-1", "prompt": "run production-shaped A2A trust check"},
-            "caller_signature": "http-demo-caller-signature",
+            "task": task,
+            "caller_signature": sign_payload_jws(unsigned_ipr, caller_card.did, caller_ipr_private_key),
         },
     )
 

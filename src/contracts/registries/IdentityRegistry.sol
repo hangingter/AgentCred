@@ -11,6 +11,9 @@ contract IdentityRegistry {
     error EmptyPrincipalDID();
     error DIDAlreadyRegistered(bytes32 didHash);
     error ZeroAddress();
+    bytes4 private constant _INTERFACE_ID_ERC165 = 0x01ffc9a7;
+    bytes4 private constant _INTERFACE_ID_ERC721 = 0x80ac58cd;
+    bytes4 private constant _INTERFACE_ID_ERC721_METADATA = 0x5b5e139f;
 
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
     event AgentRegistered(
@@ -98,6 +101,29 @@ contract IdentityRegistry {
 
     function exists(uint256 agentId) external view returns (bool) {
         return _records[agentId].exists;
+    }
+
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == _INTERFACE_ID_ERC165
+            || interfaceId == _INTERFACE_ID_ERC721
+            || interfaceId == _INTERFACE_ID_ERC721_METADATA;
+    }
+
+    function approve(address, uint256) external pure {
+        revert SoulboundToken();
+    }
+
+    function setApprovalForAll(address, bool) external pure {
+        revert SoulboundToken();
+    }
+
+    function getApproved(uint256 agentId) external view returns (address) {
+        _recordOf(agentId);
+        return address(0);
+    }
+
+    function isApprovedForAll(address, address) external pure returns (bool) {
+        return false;
     }
 
     function transferFrom(address, address, uint256) external pure {

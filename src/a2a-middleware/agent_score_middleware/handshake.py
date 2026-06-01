@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 from agent_score_engine import verify_credit_vc, verify_credit_vc_jws
 
 from .models import AgentCard, AgentPolicy, HandshakeResult, TIER_RANK
+from .resolvers import CredentialStatusResolver, DIDKeyResolver, TrustRegistryReader
 
 
 def _ensure_utc(dt: datetime) -> datetime:
@@ -27,6 +28,9 @@ def _verify_device_binding(
     card: AgentCard,
     policy: AgentPolicy,
     public_key_by_device_authority: Dict[str, str] | None,
+    did_key_resolver: DIDKeyResolver | None,
+    credential_status_resolver: CredentialStatusResolver | None,
+    trust_registry: TrustRegistryReader | None,
     now: datetime,
 ) -> Optional[str]:
     if not policy.require_device_binding:
@@ -37,6 +41,12 @@ def _verify_device_binding(
     issuer = device_vc.get("issuer")
     if policy.trusted_device_authorities and issuer not in policy.trusted_device_authorities:
         return "UNTRUSTED_DEVICE_AUTHORITY"
+    if (
+        isinstance(issuer, str)
+        and trust_registry is not None
+        and not trust_registry.is_trusted_device_authority(issuer)
+    ):
+        return "UNTRUSTED_DEVICE_AUTHORITY"
     valid_from = _parse_datetime(device_vc.get("validFrom") or device_vc.get("issuanceDate"))
     valid_until = _parse_datetime(device_vc.get("validUntil") or device_vc.get("expirationDate"))
     if valid_from is None or valid_until is None or now < valid_from or now >= valid_until:
@@ -45,9 +55,20 @@ def _verify_device_binding(
     if isinstance(proof, dict) and proof.get("type") == "AgentScoreJWS2026":
         jws = proof.get("jws")
         pubkey = (public_key_by_device_authority or {}).get(issuer) if isinstance(issuer, str) else None
+        if pubkey is None and isinstance(issuer, str) and did_key_resolver is not None:
+            pubkey = did_key_resolver.public_key_for(issuer)
         if not jws or not pubkey:
             return "INVALID_DEVICE_BINDING"
-        if not verify_credit_vc_jws(device_vc, {issuer}, {issuer: pubkey}):
+        revoked_status_ids = _revoked_status_ids(device_vc, credential_status_resolver)
+        if revoked_status_ids is None:
+            return "REVOKED_DEVICE_BINDING"
+        if not verify_credit_vc_jws(
+            device_vc,
+            {issuer},
+            {issuer: pubkey},
+            now=now,
+            revoked_status_ids=revoked_status_ids,
+        ):
             return "INVALID_DEVICE_BINDING"
     subject = device_vc.get("credentialSubject", {}) if isinstance(device_vc, dict) else {}
     if subject.get("id") != card.did:
@@ -86,23 +107,61 @@ def verify_agent_card_credit(
     secret_by_issuer: Dict[str, str] | None = None,
     public_key_by_issuer: Dict[str, str] | None = None,
     public_key_by_device_authority: Dict[str, str] | None = None,
+    did_key_resolver: DIDKeyResolver | None = None,
+    credential_status_resolver: CredentialStatusResolver | None = None,
+    trust_registry: TrustRegistryReader | None = None,
     now: datetime | None = None,
 ) -> HandshakeResult:
     if card.did is None:
         return HandshakeResult(False, "MISSING_DID", card.did)
+    if (
+        policy.require_registered_agent
+        and trust_registry is not None
+        and not trust_registry.is_known_agent(card.did)
+    ):
+        return HandshakeResult(False, "UNREGISTERED_AGENT", card.did)
     vc = card.credit_vc
     if not vc:
         return HandshakeResult(False, "MISSING_CREDIT_VC", card.did)
     issuer = vc.get("issuer")
     if policy.trusted_issuers and issuer not in policy.trusted_issuers:
         return HandshakeResult(False, "UNTRUSTED_ISSUER", card.did)
+    if (
+        isinstance(issuer, str)
+        and trust_registry is not None
+        and not trust_registry.is_trusted_credit_authority(issuer)
+    ):
+        return HandshakeResult(False, "UNTRUSTED_ISSUER", card.did)
 
     proof = vc.get("proof", {})
     proof_type = proof.get("type") if isinstance(proof, dict) else None
+    current = _ensure_utc(now or datetime.now(timezone.utc))
+    revoked_status_ids = _revoked_status_ids(vc, credential_status_resolver)
+    if revoked_status_ids is None:
+        return HandshakeResult(False, "REVOKED_CREDENTIAL", card.did)
     if proof_type == "AgentScoreJWS2026":
-        verified = verify_credit_vc_jws(vc, policy.trusted_issuers, public_key_by_issuer or {})
+        resolved_public_keys = dict(public_key_by_issuer or {})
+        if isinstance(issuer, str) and issuer not in resolved_public_keys and did_key_resolver is not None:
+            resolved = did_key_resolver.public_key_for(issuer)
+            if resolved:
+                resolved_public_keys[issuer] = resolved
+        trusted_issuers = policy.trusted_issuers or ({issuer} if isinstance(issuer, str) else set())
+        verified = verify_credit_vc_jws(
+            vc,
+            trusted_issuers,
+            resolved_public_keys,
+            now=current,
+            revoked_status_ids=revoked_status_ids,
+        )
     elif proof_type == "AgentScoreHMAC2026":
-        verified = verify_credit_vc(vc, policy.trusted_issuers, secret_by_issuer)
+        trusted_issuers = policy.trusted_issuers or ({issuer} if isinstance(issuer, str) else set())
+        verified = verify_credit_vc(
+            vc,
+            trusted_issuers,
+            secret_by_issuer or {},
+            now=current,
+            revoked_status_ids=revoked_status_ids,
+        )
     else:
         return HandshakeResult(False, "INVALID_CREDIT_VC", card.did)
     if not verified:
@@ -120,9 +179,31 @@ def verify_agent_card_credit(
     if isinstance(violations, int) and violations > policy.max_violation_90d:
         return HandshakeResult(False, "VIOLATION_EXCEEDED", card.did)
 
-    current = _ensure_utc(now or datetime.now(timezone.utc))
-    device_reason = _verify_device_binding(card, policy, public_key_by_device_authority, current)
+    device_reason = _verify_device_binding(
+        card,
+        policy,
+        public_key_by_device_authority,
+        did_key_resolver,
+        credential_status_resolver,
+        trust_registry,
+        current,
+    )
     if device_reason:
         return HandshakeResult(False, device_reason, card.did)
 
     return HandshakeResult(True, "ACCEPTED", card.did, score=int(score), tier=tier)
+
+
+def _revoked_status_ids(
+    vc: Dict[str, Any],
+    credential_status_resolver: CredentialStatusResolver | None,
+) -> set[str] | None:
+    credential_status = vc.get("credentialStatus")
+    if not isinstance(credential_status, dict):
+        return set()
+    status_id = credential_status.get("id")
+    if not isinstance(status_id, str):
+        return set()
+    if credential_status_resolver is not None and credential_status_resolver.is_revoked(status_id):
+        return None
+    return set()

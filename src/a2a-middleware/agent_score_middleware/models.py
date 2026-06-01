@@ -21,6 +21,7 @@ class AgentPolicy:
     allowed_countries: Set[str] = field(default_factory=set)
     blocked_asns: Set[int] = field(default_factory=set)
     require_principal_co_sign_on_drift: bool = True
+    require_registered_agent: bool = False
 
     def __post_init__(self) -> None:
         if self.min_tier not in TIER_RANK:
@@ -97,8 +98,12 @@ class InteractionProofRecordEnvelope:
     callee_signature: str
 
     @property
-    def ipr_hash(self) -> str:
+    def unsigned_payload(self) -> Dict[str, Any]:
         payload = asdict(self)
         payload.pop("caller_signature")
         payload.pop("callee_signature")
-        return sha256_json(payload)
+        return payload
+
+    @property
+    def ipr_hash(self) -> str:
+        return sha256_json(self.unsigned_payload)

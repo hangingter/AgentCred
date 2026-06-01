@@ -73,6 +73,12 @@ contract M1RegistriesTest {
 
         require(agentId == 1, "agent id");
         require(identity.ownerOf(agentId) == address(this), "owner");
+        require(identity.balanceOf(address(this)) == 1, "balance");
+        require(identity.supportsInterface(0x01ffc9a7), "erc165");
+        require(identity.supportsInterface(0x80ac58cd), "erc721");
+        require(identity.supportsInterface(0x5b5e139f), "erc721 metadata");
+        require(identity.getApproved(agentId) == address(0), "approval");
+        require(!identity.isApprovedForAll(address(this), address(0xBEEF)), "operator");
         require(
             _eq(identity.didOf(agentId), "did:ethr:0x2105:0x0000000000000000000000000000000000008004"),
             "did"
