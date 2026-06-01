@@ -9,7 +9,7 @@
 Formerly **Agent-Score**: a decentralized credit protocol for AI Agents, providing banking-grade identity verification, credit scoring, and accountability. It achieves a complete trust chain: **Agent → Device → Owner**.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![ERC-8004](https://img.shields.io/badge/ERC--8004-compatible-green.svg)](https://eips.ethereum.org/EIPS/eip-8004)
 [![Google A2A](https://img.shields.io/badge/Google%20A2A-compatible-blue.svg)](https://github.com/google/a2a-protocol)
 
@@ -134,7 +134,7 @@ agent-score/
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.7.17+ (due to environment constraints)
+- Python 3.9+
 - Foundry (for Solidity contract testing)
 
 ### 1. Clone and Setup
@@ -144,7 +144,7 @@ git clone https://github.com/agent-score/agent-score.git
 cd agent-score
 
 # Set up Python environment
-python3.7 -m venv venv
+python3 -m venv venv
 source venv/bin/activate
 pip install -e ".[dev]"
 ```
