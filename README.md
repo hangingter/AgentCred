@@ -22,6 +22,12 @@ Formerly **Agent-Score**: a decentralized credit protocol for AI Agents, providi
 | 🇨🇳 中文 | [docs/whitepaper/whitepaper-CN.md](docs/whitepaper/whitepaper-CN.md) |
 | 🇺🇸 English | [docs/whitepaper/whitepaper-EN.md](docs/whitepaper/whitepaper-EN.md) |
 
+## 🔎 Architecture Review
+
+| Document | Description |
+|---|---|
+| [AgentCred Architecture Review CN](docs/reviews/2026-06-01-agentcred-architecture-review-cn.md) | One-page risk and architecture review for MVP readiness, trust roots, interoperability, and production gaps |
+
 ---
 
 ## ✨ Core Features
