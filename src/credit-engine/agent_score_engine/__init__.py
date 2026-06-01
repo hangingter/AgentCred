@@ -16,6 +16,7 @@ from .schemas import export_json_schemas
 from .jws import (
     generate_es256k_private_key_pem,
     public_key_pem_from_private_key,
+    sign_json_jws,
     verify_json_jws,
 )
 from .vc import (
@@ -46,6 +47,7 @@ __all__ = [
     "verify_credit_vc",
     "generate_es256k_private_key_pem",
     "public_key_pem_from_private_key",
+    "sign_json_jws",
     "sign_credit_vc_jws",
     "verify_credit_vc_jws",
     "verify_json_jws",

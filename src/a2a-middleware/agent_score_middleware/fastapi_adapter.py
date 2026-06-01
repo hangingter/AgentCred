@@ -6,8 +6,9 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from .handshake import verify_agent_card_credit
-from .ipr import sha256_json, sign_payload
+from .ipr import sha256_json, sign_payload, sign_payload_jws, verify_payload_jws
 from .models import AgentCard, AgentPolicy, InteractionProofRecordEnvelope
+from .resolvers import CredentialStatusResolver, DIDKeyResolver, TrustRegistryReader
 
 
 TaskHandler = Callable[[Dict[str, Any]], Dict[str, Any]]
@@ -50,8 +51,13 @@ def create_agent_app(
     policy: AgentPolicy,
     secret_by_issuer: Dict[str, str],
     task_handler: TaskHandler,
+    provider_private_key_pem: Optional[str] = None,
+    public_key_by_agent: Optional[Dict[str, str]] = None,
     public_key_by_issuer: Optional[Dict[str, str]] = None,
     public_key_by_device_authority: Optional[Dict[str, str]] = None,
+    did_key_resolver: Optional[DIDKeyResolver] = None,
+    credential_status_resolver: Optional[CredentialStatusResolver] = None,
+    trust_registry: Optional[TrustRegistryReader] = None,
     ipr_anchor: Any = None,
 ) -> FastAPI:
     app = FastAPI(title=f"{provider_card.name} Agent-Score Adapter", version=provider_card.version)
@@ -69,6 +75,9 @@ def create_agent_app(
             secret_by_issuer=secret_by_issuer or {},
             public_key_by_issuer=public_key_by_issuer or {},
             public_key_by_device_authority=public_key_by_device_authority or {},
+            did_key_resolver=did_key_resolver,
+            credential_status_resolver=credential_status_resolver,
+            trust_registry=trust_registry,
         )
         if not handshake.accepted:
             raise HTTPException(status_code=403, detail={"reason": handshake.reason})
@@ -88,10 +97,28 @@ def create_agent_app(
                 status_code=400,
                 detail={"reason": "MISSING_CALLER_SIGNATURE"},
             )
+        caller_public_key = (public_key_by_agent or {}).get(caller_card.did)
+        if caller_public_key is None and did_key_resolver is not None:
+            caller_public_key = did_key_resolver.public_key_for(caller_card.did)
+        if caller_public_key is not None and not verify_payload_jws(
+            unsigned_ipr,
+            request.caller_signature,
+            caller_card.did,
+            caller_public_key,
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": "INVALID_CALLER_SIGNATURE"},
+            )
+        callee_signature = (
+            sign_payload_jws(unsigned_ipr, provider_card.did, provider_private_key_pem)
+            if provider_private_key_pem
+            else sign_payload(unsigned_ipr, provider_secret)
+        )
         ipr = InteractionProofRecordEnvelope(
             **unsigned_ipr,
             caller_signature=request.caller_signature,
-            callee_signature=sign_payload(unsigned_ipr, provider_secret),
+            callee_signature=callee_signature,
         )
 
         response = {

@@ -24,6 +24,7 @@ def build_credit_vc(
     validity_days: int = DEFAULT_VALIDITY_DAYS,
     snapshot_root: str | None = None,
     violation_count_90d: int = 0,
+    credential_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not issuer:
         raise ValueError("issuer is required")
@@ -35,7 +36,7 @@ def build_credit_vc(
     issued_at = _ensure_utc(issued_at or datetime.now(timezone.utc))
     expires_at = issued_at + timedelta(days=validity_days)
 
-    return {
+    vc = {
         "@context": list(VC_CONTEXT),
         "type": list(VC_TYPES),
         "issuer": issuer,
@@ -52,6 +53,9 @@ def build_credit_vc(
             "reason_codes": list(result.reason_codes),
         },
     }
+    if credential_status is not None:
+        vc["credentialStatus"] = credential_status
+    return vc
 
 
 def sign_credit_vc(
@@ -84,6 +88,7 @@ def verify_credit_vc(
     trusted_issuers: set[str],
     secret_by_issuer: dict[str, str],
     now: datetime | None = None,
+    revoked_status_ids: set[str] | None = None,
 ) -> bool:
     issuer = signed_vc.get("issuer")
     if not isinstance(issuer, str) or issuer not in trusted_issuers:
@@ -99,6 +104,8 @@ def verify_credit_vc(
     valid_until = _parse_datetime(signed_vc.get("validUntil"))
     current = _ensure_utc(now or datetime.now(timezone.utc))
     if valid_from is None or valid_until is None or current < valid_from or current >= valid_until:
+        return False
+    if _is_revoked(signed_vc, revoked_status_ids):
         return False
 
     expected = _sign(_without_proof(signed_vc), secret)
@@ -134,6 +141,7 @@ def verify_credit_vc_jws(
     trusted_issuers: set[str],
     public_key_by_issuer: dict[str, str],
     now: datetime | None = None,
+    revoked_status_ids: set[str] | None = None,
 ) -> bool:
     issuer = signed_vc.get("issuer")
     if not isinstance(issuer, str) or issuer not in trusted_issuers:
@@ -153,6 +161,8 @@ def verify_credit_vc_jws(
     current = _ensure_utc(now or datetime.now(timezone.utc))
     if valid_from is None or valid_until is None or current < valid_from or current >= valid_until:
         return False
+    if _is_revoked(signed_vc, revoked_status_ids):
+        return False
 
     payload = verify_json_jws(jws, public_key_pem, expected_alg="ES256K", expected_kid=issuer)
     return payload == _without_proof(signed_vc)
@@ -168,6 +178,16 @@ def _without_proof(payload: dict[str, Any]) -> dict[str, Any]:
     copy = dict(payload)
     copy.pop("proof", None)
     return copy
+
+
+def _is_revoked(signed_vc: dict[str, Any], revoked_status_ids: set[str] | None) -> bool:
+    credential_status = signed_vc.get("credentialStatus")
+    if not isinstance(credential_status, dict):
+        return False
+    status_id = credential_status.get("id")
+    if not isinstance(status_id, str):
+        return False
+    return status_id in (revoked_status_ids or set())
 
 
 def _ensure_utc(value: datetime) -> datetime:

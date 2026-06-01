@@ -45,6 +45,34 @@ class JwsVCTest(unittest.TestCase):
 
         self.assertFalse(verify_credit_vc_jws(signed, {issuer}, {issuer: public_key}))
 
+    def test_jws_rejects_revoked_credential_status(self) -> None:
+        issuer = "did:ethr:0x2105:0xissuer"
+        private_key = generate_es256k_private_key_pem()
+        public_key = public_key_pem_from_private_key(private_key)
+        score = calculate_credit_score(
+            CreditInput(agent_id="did:agent", principal=PrincipalProfile(score=800))
+        )
+        issued_at = datetime.now(timezone.utc) - timedelta(days=1)
+        vc = build_credit_vc(
+            score,
+            issuer=issuer,
+            issued_at=issued_at,
+            credential_status={
+                "id": "agentcred:revocation:credit:1",
+                "type": "AgentCredRevocationList2026",
+            },
+        )
+        signed = sign_credit_vc_jws(vc, issuer=issuer, private_key_pem=private_key)
+
+        self.assertFalse(
+            verify_credit_vc_jws(
+                signed,
+                {issuer},
+                {issuer: public_key},
+                revoked_status_ids={"agentcred:revocation:credit:1"},
+            )
+        )
+
     def test_jws_rejects_wrong_kid_or_alg(self) -> None:
         issuer = "did:ethr:0x2105:0xissuer"
         other_issuer = "did:ethr:0x2105:0xother"

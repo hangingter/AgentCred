@@ -11,8 +11,11 @@ from pydantic import BaseModel, Field, validator as pydantic_validator
 from agent_score_engine import (
     VALIDATION_TYPE_WEIGHTS,
     CreditInput,
+    DeviceAttestation,
+    DeviceProfile,
     EndorsementEdge,
     InteractionProofRecord,
+    NetworkFingerprint,
     PrincipalProfile,
     StakeSnapshot,
     ValidationAttestation,
@@ -78,6 +81,45 @@ class PrincipalProfileRequest(BaseModel):
     vc_expired: bool = False
 
 
+class DeviceAttestationRequest(BaseModel):
+    attestation_type: str
+    device_pubkey_hash: str
+    agent_did: str
+    timestamp: int
+    quote: Optional[str] = None
+    signature: Optional[str] = None
+    nonce: Optional[str] = None
+
+
+class NetworkFingerprintRequest(BaseModel):
+    country_code: Optional[str] = None
+    asn: Optional[int] = None
+    ipv4_prefix: Optional[str] = None
+    ipv6_prefix: Optional[str] = None
+    is_vpn: Optional[bool] = None
+    is_tor_exit: Optional[bool] = None
+    observer_did: Optional[str] = None
+    timestamp: Optional[int] = None
+
+
+class DeviceProfileRequest(BaseModel):
+    binding_level: str = "none"
+    attestation: Optional[DeviceAttestationRequest] = None
+    network: Optional[NetworkFingerprintRequest] = None
+    registered_country_code: Optional[str] = None
+    registered_asn: Optional[int] = None
+    has_network_drift: bool = False
+    has_principal_co_sign: bool = False
+
+    @pydantic_validator("binding_level")
+    @classmethod
+    def _validate_binding_level(cls, v: str) -> str:
+        allowed = {"none", "registration", "runtime", "strong"}
+        if v not in allowed:
+            raise ValueError(f"binding_level must be one of {sorted(allowed)}")
+        return v
+
+
 class CreditInputRequest(BaseModel):
     agent_id: str
     interactions: list[InteractionProofRecordRequest] = Field(default_factory=list)
@@ -86,6 +128,7 @@ class CreditInputRequest(BaseModel):
     endorsements: list[EndorsementEdgeRequest] = Field(default_factory=list)
     validations: list[ValidationAttestationRequest] = Field(default_factory=list)
     principal: PrincipalProfileRequest = Field(default_factory=PrincipalProfileRequest)
+    device: DeviceProfileRequest = Field(default_factory=DeviceProfileRequest)
 
 
 class IssueVCRequest(BaseModel):
@@ -183,6 +226,23 @@ def _to_credit_input(request: CreditInputRequest) -> CreditInput:
             score=request.principal.score,
             flagged=request.principal.flagged,
             vc_expired=request.principal.vc_expired,
+        ),
+        device=DeviceProfile(
+            binding_level=request.device.binding_level,  # type: ignore[arg-type]
+            attestation=(
+                DeviceAttestation(**request.device.attestation.dict())
+                if request.device.attestation is not None
+                else None
+            ),
+            network=(
+                NetworkFingerprint(**request.device.network.dict())
+                if request.device.network is not None
+                else None
+            ),
+            registered_country_code=request.device.registered_country_code,
+            registered_asn=request.device.registered_asn,
+            has_network_drift=request.device.has_network_drift,
+            has_principal_co_sign=request.device.has_principal_co_sign,
         ),
     )
 

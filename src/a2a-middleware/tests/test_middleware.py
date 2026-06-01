@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime, timedelta, timezone
 import unittest
 
@@ -18,9 +20,14 @@ from agent_score_engine import (
 from agent_score_middleware import (
     AgentCard,
     AgentPolicy,
+    InMemoryCredentialStatusResolver,
+    InMemoryTrustRegistry,
     InteractionProofRecordEnvelope,
+    StaticDIDKeyResolver,
     sha256_json,
     sign_payload,
+    sign_payload_jws,
+    verify_payload_jws,
     verify_agent_card_credit,
 )
 
@@ -83,6 +90,31 @@ class AgentScoreMiddlewareTest(unittest.TestCase):
         self.assertEqual(ipr.ipr_hash, mutated.ipr_hash)
         self.assertEqual(len(ipr.ipr_hash), 64)
 
+    def test_ipr_jws_signatures_are_publicly_verifiable(self) -> None:
+        caller_private = generate_es256k_private_key_pem()
+        callee_private = generate_es256k_private_key_pem()
+        caller_public = public_key_pem_from_private_key(caller_private)
+        callee_public = public_key_pem_from_private_key(callee_private)
+        unsigned = {
+            "caller_did": "did:ethr:0x2105:0xcaller",
+            "callee_did": "did:ethr:0x2105:0xcallee",
+            "task_id": "task-1",
+            "success": True,
+            "on_time": True,
+            "result_hash": sha256_json({"ok": True}),
+        }
+        ipr = InteractionProofRecordEnvelope(
+            **unsigned,
+            caller_signature=sign_payload_jws(unsigned, unsigned["caller_did"], caller_private),
+            callee_signature=sign_payload_jws(unsigned, unsigned["callee_did"], callee_private),
+        )
+
+        self.assertTrue(verify_payload_jws(ipr.unsigned_payload, ipr.caller_signature, ipr.caller_did, caller_public))
+        self.assertTrue(verify_payload_jws(ipr.unsigned_payload, ipr.callee_signature, ipr.callee_did, callee_public))
+        tampered = dict(unsigned)
+        tampered["success"] = False
+        self.assertFalse(verify_payload_jws(tampered, ipr.caller_signature, ipr.caller_did, caller_public))
+
     def test_jws_credit_vc_passes_handshake(self) -> None:
         private_key = generate_es256k_private_key_pem()
         public_key = public_key_pem_from_private_key(private_key)
@@ -98,6 +130,71 @@ class AgentScoreMiddlewareTest(unittest.TestCase):
 
         self.assertTrue(result.accepted)
         self.assertEqual(result.reason, "ACCEPTED")
+
+    def test_did_key_resolver_supplies_issuer_key(self) -> None:
+        private_key = generate_es256k_private_key_pem()
+        public_key = public_key_pem_from_private_key(private_key)
+        card = _card_with_score(private_key_pem=private_key)
+        policy = AgentPolicy(min_credit_score=600, min_tier="B", trusted_issuers={ISSUER})
+
+        result = verify_agent_card_credit(
+            card,
+            policy,
+            {},
+            did_key_resolver=StaticDIDKeyResolver({ISSUER: public_key}),
+        )
+
+        self.assertTrue(result.accepted)
+        self.assertEqual(result.reason, "ACCEPTED")
+
+    def test_revoked_credit_vc_is_rejected(self) -> None:
+        private_key = generate_es256k_private_key_pem()
+        public_key = public_key_pem_from_private_key(private_key)
+        card = _card_with_score(
+            private_key_pem=private_key,
+            credential_status={"id": "agentcred:revocation:credit:42", "type": "AgentCredRevocationList2026"},
+        )
+        policy = AgentPolicy(min_credit_score=600, min_tier="B", trusted_issuers={ISSUER})
+
+        result = verify_agent_card_credit(
+            card,
+            policy,
+            {},
+            public_key_by_issuer={ISSUER: public_key},
+            credential_status_resolver=InMemoryCredentialStatusResolver({"agentcred:revocation:credit:42"}),
+        )
+
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.reason, "REVOKED_CREDENTIAL")
+
+    def test_trust_registry_is_runtime_authority_source(self) -> None:
+        private_key = generate_es256k_private_key_pem()
+        public_key = public_key_pem_from_private_key(private_key)
+        card = _card_with_score(private_key_pem=private_key)
+        policy = AgentPolicy(min_credit_score=600, min_tier="B", require_registered_agent=True)
+        registry = InMemoryTrustRegistry(
+            agents={card.did},
+            credit_authorities={ISSUER},
+        )
+
+        accepted = verify_agent_card_credit(
+            card,
+            policy,
+            {},
+            public_key_by_issuer={ISSUER: public_key},
+            trust_registry=registry,
+        )
+        rejected = verify_agent_card_credit(
+            card,
+            policy,
+            {},
+            public_key_by_issuer={ISSUER: public_key},
+            trust_registry=InMemoryTrustRegistry(agents=set(), credit_authorities={ISSUER}),
+        )
+
+        self.assertTrue(accepted.accepted)
+        self.assertFalse(rejected.accepted)
+        self.assertEqual(rejected.reason, "UNREGISTERED_AGENT")
 
     def test_strong_device_binding_passes(self) -> None:
         device_authority = "did:web:device.example"
@@ -231,7 +328,11 @@ class AgentScoreMiddlewareTest(unittest.TestCase):
         self.assertNotIn("NO_DEVICE_BINDING", with_device.reason_codes)
 
 
-def _card_with_score(principal_score: int = 800, private_key_pem: str = "") -> AgentCard:
+def _card_with_score(
+    principal_score: int = 800,
+    private_key_pem: str = "",
+    credential_status: dict | None = None,
+) -> AgentCard:
     credit_input = CreditInput(
         agent_id="did:ethr:0x2105:0xagent",
         interactions=[
@@ -252,7 +353,7 @@ def _card_with_score(principal_score: int = 800, private_key_pem: str = "") -> A
     )
     result = calculate_credit_score(credit_input)
     issued_at = datetime.now(timezone.utc) - timedelta(days=1)
-    payload = build_credit_vc(result, issuer=ISSUER, issued_at=issued_at)
+    payload = build_credit_vc(result, issuer=ISSUER, issued_at=issued_at, credential_status=credential_status)
     if private_key_pem:
         signed = sign_credit_vc_jws(payload, issuer=ISSUER, private_key_pem=private_key_pem)
     else:
